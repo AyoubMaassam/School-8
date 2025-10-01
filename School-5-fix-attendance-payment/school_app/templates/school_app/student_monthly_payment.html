@@ -57,11 +57,111 @@
 
             {% if selected_group %}
                 <hr>
-                <h4>تفاصيل الفوج المبدئية (جاري الاستعادة): {{ selected_group.name }}</h4>
-                <p><strong>المادة:</strong> {{ selected_group.subject.name }}</p>
-                <p><strong>المدرس:</strong> {{ selected_group.teacher.first_name }} {{ selected_group.teacher.last_name }}</p>
-                <p><strong>سعر الـ 4 حصص:</strong> {{ selected_group.price_per_4_sessions|floatformat:2 }} دج (يعني {{ price_per_session|floatformat:2 }} دج للحصة الواحدة)</p>
-                <p><em>(سيتم استعادة باقي تفاصيل الدفع والحصص في الخطوات التالية)</em></p>
+                <h4>تفاصيل الدفع للفوج: {{ selected_group.name }}</h4>
+                <div class="row">
+                    <div class="col-md-6">
+                        <p><strong>الحصص المتبقية (الرصيد):</strong> {{ remaining_sessions_count }}</p>
+                        <p><strong>الحصص المستحقة (غير مدفوعة):</strong> {{ sessions_due_count }}</p>
+                        <p><strong>المبلغ الإجمالي المستحق:</strong> {{ gross_amount_due|floatformat:2 }} دج</p>
+                    </div>
+                </div>
+
+                <hr>
+
+                <!-- Payment Form -->
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5 class="card-title">تسديد الحصص</h5>
+                    </div>
+                    <div class="card-body">
+                        <form method="POST" action="{% url 'student_monthly_payment' student.id %}">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="process_payment">
+                            <input type="hidden" name="group_id" value="{{ selected_group.id }}">
+                            <div class="form-row align-items-end">
+                                <div class="col-md-6">
+                                    <label for="sessions_to_pay">عدد الحصص المراد تسديدها:</label>
+                                    <input type="number" name="sessions_to_pay" id="sessions_to_pay" class="form-control" min="1" placeholder="أدخل عدد الحصص">
+                                </div>
+                                <div class="col-md-6 mt-2 mt-md-0">
+                                    <button type="submit" class="btn btn-success btn-block">
+                                        <i class="fas fa-dollar-sign"></i> تسديد
+                                    </button>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Manual Adjustment Form -->
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5 class="card-title">تعديل يدوي للرصيد</h5>
+                    </div>
+                    <div class="card-body">
+                        <form method="POST" action="{% url 'student_monthly_payment' student.id %}">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="adjust_balance">
+                            <input type="hidden" name="group_id" value="{{ selected_group.id }}">
+                            <div class="form-row align-items-end">
+                                <div class="col-md-6">
+                                    <label for="sessions_to_adjust">تعديل عدد الحصص:</label>
+                                    <input type="number" name="sessions_to_adjust" id="sessions_to_adjust" class="form-control" placeholder="أدخل رقماً (موجب للإضافة، سالب للخصم)">
+                                </div>
+                                <div class="col-md-6 mt-2 mt-md-0">
+                                    <button type="submit" class="btn btn-warning btn-block">
+                                        <i class="fas fa-edit"></i> تعديل الرصيد
+                                    </button>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Sessions List for Excusing Absences -->
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title">سجل الحصص</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-striped">
+                                <thead>
+                                    <tr>
+                                        <th>التاريخ والوقت</th>
+                                        <th>حالة الحضور</th>
+                                        <th>حالة الدفع</th>
+                                        <th>إجراء</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for session_info in sessions_display %}
+                                        <tr>
+                                            <td>{{ session_info.date|date:"Y-m-d" }} - {{ session_info.time|time:"H:i" }}</td>
+                                            <td>{{ session_info.status }}</td>
+                                            <td>{{ session_info.paid_status }}</td>
+                                            <td>
+                                                {% if session_info.can_be_excused %}
+                                                    <form method="POST" action="{% url 'student_monthly_payment' student.id %}" class="d-inline">
+                                                        {% csrf_token %}
+                                                        <input type="hidden" name="action" value="mark_excused">
+                                                        <input type="hidden" name="group_id" value="{{ selected_group.id }}">
+                                                        <input type="hidden" name="session_id" value="{{ session_info.session_id }}">
+                                                        <button type="submit" class="btn btn-sm btn-outline-info">عذر الغياب</button>
+                                                    </form>
+                                                {% endif %}
+                                            </td>
+                                        </tr>
+                                    {% empty %}
+                                        <tr>
+                                            <td colspan="4" class="text-center">لا توجد حصص لعرضها.</td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
             {% else %}
                 {% if request.GET.group_id %}
                     <p class="text-danger">الفوج المحدد غير موجود أو الطالب غير مسجل فيه.</p>

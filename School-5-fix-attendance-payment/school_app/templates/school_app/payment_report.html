@@ -1,0 +1,159 @@
+{% extends 'school_app/base.html' %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+    <h1 class="h3 mb-4 text-gray-800">{{ page_title }}</h1>
+
+    <!-- Date Filter Form -->
+    <div class="card shadow mb-4">
+        <div class="card-header py-3">
+            <h6 class="m-0 font-weight-bold text-primary">تصفية حسب التاريخ</h6>
+        </div>
+        <div class="card-body">
+            <form method="get" action="{% url 'payment_report' %}" class="form-inline">
+                <!-- Period presets -->
+                <div class="form-group mr-3">
+                    <label for="period" class="mr-2">الفترة:</label>
+                    <select name="period" id="period" class="form-control">
+                        <option value="current_month" {% if period_type_selected == 'current_month' %}selected{% endif %}>الشهر الحالي</option>
+                        <option value="last_month" {% if period_type_selected == 'last_month' %}selected{% endif %}>الشهر الماضي</option>
+                        <option value="current_year" {% if period_type_selected == 'current_year' %}selected{% endif %}>السنة الحالية</option>
+                        <option value="custom" {% if period_type_selected == 'custom' %}selected{% endif %}>فترة مخصصة</option>
+                    </select>
+                </div>
+
+                <!-- Custom date range -->
+                <div id="custom-date-range" class="form-row" {% if period_type_selected != 'custom' %}style="display: none;"{% endif %}>
+                    <div class="form-group col-md-6">
+                        <label for="start_date" class="mr-2">من:</label>
+                        <input type="date" name="start_date" id="start_date" class="form-control" value="{{ start_date_selected }}">
+                    </div>
+                    <div class="form-group col-md-6">
+                        <label for="end_date" class="mr-2">إلى:</label>
+                        <input type="date" name="end_date" id="end_date" class="form-control" value="{{ end_date_selected }}">
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-primary ml-3">تطبيق</button>
+            </form>
+            {% if errors %}
+                <div class="alert alert-danger mt-3">
+                    <ul>
+                        {% for error in errors %}
+                            <li>{{ error }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Financial Summary -->
+    <div class="row">
+        <div class="col-xl-3 col-md-6 mb-4">
+            <div class="card border-left-success shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-success text-uppercase mb-1">إجمالي الدخل</div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800">{{ total_income|floatformat:2 }} دج</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6 mb-4">
+            <div class="card border-left-danger shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-danger text-uppercase mb-1">إجمالي المصاريف</div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800">{{ total_expenses|floatformat:2 }} دج</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6 mb-4">
+            <div class="card border-left-primary shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-primary text-uppercase mb-1">الدخل الصافي</div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800">{{ net_income|floatformat:2 }} دج</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Detailed Breakdown -->
+    <div class="card shadow mb-4">
+        <div class="card-header py-3">
+            <h6 class="m-0 font-weight-bold text-primary">تفاصيل الدخل والمصاريف</h6>
+        </div>
+        <div class="card-body">
+            <p><strong>الدخل من رسوم التسجيل:</strong> {{ income_from_registration|floatformat:2 }} دج</p>
+            <p><strong>الدخل من الحصص:</strong> {{ income_from_sessions|floatformat:2 }} دج</p>
+            <hr>
+            <h6>إحصائيات إضافية للفترة:</h6>
+            <ul>
+                <li><strong>عدد الطلاب الجدد:</strong> {{ new_students_count }}</li>
+                <li><strong>عدد الأفواج الجديدة:</strong> {{ new_groups_count }}</li>
+                <li><strong>عدد الحصص المكتملة:</strong> {{ completed_sessions_count }}</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Income by Group -->
+    <div class="card shadow mb-4">
+        <div class="card-header py-3">
+            <h6 class="m-0 font-weight-bold text-primary">الدخل حسب الفوج</h6>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-bordered" id="dataTable" width="100%" cellspacing="0">
+                    <thead>
+                        <tr>
+                            <th>الفوج</th>
+                            <th>المادة</th>
+                            <th>المدرس</th>
+                            <th>الدخل</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for group_data in income_by_group_data %}
+                        <tr>
+                            <td>{{ group_data.name }}</td>
+                            <td>{{ group_data.subject_name }}</td>
+                            <td>{{ group_data.teacher_name }}</td>
+                            <td>{{ group_data.income|floatformat:2 }} دج</td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="4" class="text-center">لا يوجد دخل من الأفواج في هذه الفترة.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const periodSelect = document.getElementById('period');
+    const customDateRange = document.getElementById('custom-date-range');
+
+    periodSelect.addEventListener('change', function() {
+        if (this.value === 'custom') {
+            customDateRange.style.display = 'flex';
+        } else {
+            customDateRange.style.display = 'none';
+        }
+    });
+});
+</script>
+{% endblock %}

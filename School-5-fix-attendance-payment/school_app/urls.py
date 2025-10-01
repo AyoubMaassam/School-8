@@ -52,7 +52,6 @@ urlpatterns = [
     # Payment routes
     path('payments/student/<int:student_id>/', views.student_payment, name='student_payment'),
     path('payments/teacher/<int:teacher_id>/', views.teacher_payment, name='teacher_payment'),
-    path('payments/report/', views.payment_report, name='payment_report'),
     path('financial-reports/logs/', views.action_log_list, name='action_log_list'),
     
     # API endpoints for frontend

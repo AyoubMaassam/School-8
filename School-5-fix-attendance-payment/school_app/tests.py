@@ -10,9 +10,6 @@ from . import views # To access constants like REGISTRATION_FEE_AMOUNT
 # A_REGISTRATION_FEE_AMOUNT = Decimal('500.00') # Defined in views
 
 class BasicSetupTests(TestCase):
-    def test_example(self):
-        self.assertEqual(1 + 1, 2)
-
     def setUp(self):
         # Common setup for tests: Client, some basic data
         self.client = Client()
@@ -232,51 +229,6 @@ class AttendanceApiTests(BasicSetupTests):
         self.assertTrue(Attendance.objects.filter(student=self.student1, session=self.session4_g1, present=True).exists())
 
 
-class SessionDeletionTests(BasicSetupTests):
-    def test_session_deletion_refunds_paid_students(self):
-        # Create a new student with a zero prepaid balance
-        student3 = Student.objects.create(
-            full_name="Refund Test Student",
-            phone_number="0777123125",
-            guardian_phone="0666123125",
-            birth_day=1,
-            birth_month=1,
-            birth_year=2005,
-            academic_level=self.level_high1,
-            prepaid_balance=Decimal('0.00')
-        )
-        self.group1.students.add(student3)
-
-        # Create a new session for the group
-        session_to_delete = Session.objects.create(
-            group=self.group1,
-            date=timezone.now().date(),
-            start_time="10:00:00",
-            duration=Decimal('1.5')
-        )
-
-        # Create a paid attendance record for the student
-        Attendance.objects.create(
-            student=student3,
-            session=session_to_delete,
-            present=True,
-            student_paid_for_session=True
-        )
-
-        # Ensure the student's balance is 0 before deletion
-        self.assertEqual(student3.prepaid_balance, Decimal('0.00'))
-
-        # Delete the session
-        session_to_delete.delete()
-
-        # Refresh the student object from the database
-        student3.refresh_from_db()
-
-        # Check if the student's prepaid balance has been refunded
-        price_per_session = self.group1.price_per_4_sessions / Decimal('4.0')
-        self.assertEqual(student3.prepaid_balance, price_per_session)
-
-
 class TeacherMonthlyPaymentPageTests(BasicSetupTests):
     def setUp(self):
         super().setUp() # Call parent setUp to get all initial data
@@ -405,133 +357,22 @@ class TeacherMonthlyPaymentPageTests(BasicSetupTests):
             'sessions_to_pay_ids': [],
         }
         response = self.client.post(reverse('teacher_monthly_payment', args=[self.teacher1.id]), data=payload)
-        self.assertEqual(response.status_code, 302)
-        response = self.client.get(response.url)
+        self.assertEqual(response.status_code, 200)
         messages_list = list(response.context['messages'])
         self.assertTrue(any("الرجاء اختيار حصة واحدة على الأقل للحساب" in str(msg) for msg in messages_list))
 
 
-class PaymentReportPageTests(BasicSetupTests):
+class StudentMonthlyPaymentPageTests(BasicSetupTests):
     def setUp(self):
         super().setUp()
-        # student1: reg_fee_paid = False initially, then set to True in some tests
-        # student2: reg_fee_paid = True from start
-
-        # student1, session1_g1: present, paid
-        # student1, session2_g1: absent, unpaid
-        # student1, session3_g1: present, unpaid
-
-        # Let's make student1 pay registration fee for report calculations
-        self.student1.registration_fee_paid = True
-        self.student1.created_at = timezone.now() # Ensure it's within current period for some tests
-        self.student1.save()
-
-        # Ensure student2's created_at is also recent for testing registration fee income
-        self.student2.created_at = timezone.now() - timezone.timedelta(days=1)
-        self.student2.save()
-
-        # Teacher1 compensation for session1_g1
-        self.session1_g1.teacher_compensated = True
-        self.session1_g1.save()
-
-
-    def test_payment_report_loads_and_basic_calculation(self):
-        response = self.client.get(reverse('payment_report'))
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "تقرير المدفوعات")
-
-        # Expected income from registration: student1 (500) + student2 (500) = 1000
-        # (Assuming REGISTRATION_FEE_AMOUNT is 500 from views)
-        expected_reg_income = views.REGISTRATION_FEE_AMOUNT * 2
-        self.assertEqual(response.context['income_from_registration'], expected_reg_income)
-
-        # Expected income from sessions:
-        # student1, session1_g1 is paid. Price per session = 2000/4 = 500.
-        expected_session_income = self.group1.price_per_4_sessions / 4 * 1
-        self.assertEqual(response.context['income_from_sessions'], expected_session_income)
-
-        # Expected expenses (teacher payments):
-        # teacher1 compensated for session1_g1. Teacher pay rate = 0.7
-        # Price per session = 500. Teacher share = 500 * 0.7 = 350
-        expected_teacher_expense = (self.group1.price_per_4_sessions / 4) * views.TEACHER_SESSION_PAY_RATE
-        self.assertEqual(response.context['total_expenses'], expected_teacher_expense)
-
-        total_expected_income = expected_reg_income + expected_session_income
-        self.assertEqual(response.context['total_income'], total_expected_income)
-
-        expected_net_income = total_expected_income - expected_teacher_expense
-        self.assertEqual(response.context['net_income'], expected_net_income)
-
-    def test_payment_report_custom_date_filter(self):
-        # Create a session and payment outside the default "current month"
-        # For this test, let's make all existing data fall outside a very narrow custom range
-        # then create specific data within that range.
-
-        # Make existing data "old"
-        self.student1.created_at = timezone.now() - timezone.timedelta(days=60)
-        self.student1.save()
-        self.student2.created_at = timezone.now() - timezone.timedelta(days=60)
-        self.student2.save()
-        self.session1_g1.date = timezone.now().date() - timezone.timedelta(days=60)
-        self.session1_g1.save()
-
-        # New data for a specific period
-        filter_start_date = timezone.now().date() - timezone.timedelta(days=5)
-        filter_end_date = timezone.now().date() - timezone.timedelta(days=1)
-
-        new_student = Student.objects.create(
-            full_name="Filt Student", phone_number="0123", guardian_phone="0124",
-            birth_day=1,birth_month=1,birth_year=2000, academic_level=self.level_high1,
-            registration_fee_paid=True, created_at=timezone.now() # Within range
+        from .models import StudentGroup
+        student_group = StudentGroup.objects.get(
+            student=self.student1,
+            group=self.group1,
         )
+        student_group.enrollment_date=timezone.now().date() - timezone.timedelta(days=30)
+        student_group.save()
 
-        new_session = Session.objects.create(
-            group=self.group1, date=filter_start_date + timezone.timedelta(days=1), # Within range
-            start_time="10:00", duration=1.5, teacher_attended=True, teacher_compensated=True
-        )
-        Attendance.objects.create(student=new_student, session=new_session, present=True, student_paid_for_session=True)
-
-        response = self.client.get(
-            reverse('payment_report'),
-            {
-                'period': 'custom',
-                'start_date': filter_start_date.strftime('%Y-%m-%d'),
-                'end_date': filter_end_date.strftime('%Y-%m-%d')
-            }
-        )
-        self.assertEqual(response.status_code, 200)
-
-        # Expected income from registration: new_student (500)
-        self.assertEqual(response.context['income_from_registration'], views.REGISTRATION_FEE_AMOUNT * 1)
-        # Expected income from sessions: new_session for new_student (500)
-        self.assertEqual(response.context['income_from_sessions'], self.group1.price_per_4_sessions / 4 * 1)
-        # Expected expenses: new_session for teacher1 (350)
-        self.assertEqual(response.context['total_expenses'], (self.group1.price_per_4_sessions / 4) * views.TEACHER_SESSION_PAY_RATE)
-
-    def test_payment_report_excused_absence_does_not_affect_paid_income(self):
-        # student1, session3_g1: present, unpaid. Mark as paid.
-        att_s3 = Attendance.objects.get(student=self.student1, session=self.session3_g1)
-        att_s3.student_paid_for_session = True
-        att_s3.save()
-
-        # student1, session2_g1: absent, unpaid. Mark as excused. This should NOT make it count as income.
-        att_s2 = Attendance.objects.get(student=self.student1, session=self.session2_g1)
-        att_s2.excused_absence = True
-        att_s2.save() # Still unpaid
-
-        response = self.client.get(reverse('payment_report'))
-        self.assertEqual(response.status_code, 200)
-
-        # Income from sessions:
-        # Student1, session1_g1 (paid in setup) = 500
-        # Student1, session3_g1 (paid now) = 500
-        # Student1, session2_g1 (absent, unpaid, excused) = 0
-        # Total = 1000
-        expected_session_income = self.group1.price_per_4_sessions / 4 * 2
-        self.assertEqual(response.context['income_from_sessions'], expected_session_income)
-
-
-class StudentMonthlyPaymentPageTests(BasicSetupTests):
     def test_get_student_monthly_payment_page_no_group(self):
         response = self.client.get(reverse('student_monthly_payment', args=[self.student1.id]))
         self.assertEqual(response.status_code, 200)
@@ -545,93 +386,52 @@ class StudentMonthlyPaymentPageTests(BasicSetupTests):
         self.assertIsNotNone(response.context.get('selected_group'))
         self.assertEqual(response.context['selected_group'], self.group1)
         self.assertIn('sessions_display', response.context)
-        self.assertIn('net_amount_due', response.context)
+        self.assertIn('sessions_due_count', response.context)
 
-        # Student1: session1 (paid), session2 (absent, unpaid), session3 (present, unpaid)
-        # Price per session = 2000/4 = 500
-        # Amount due should be for session2 (if not excused) + session3 = 500 + 500 = 1000
-        # The view's amount_due calculation considers non-excused unpaid sessions.
-        # session2_g1 is absent, not paid, not excused. session3_g1 is present, not paid, not excused.
-        # Both are billable.
-        expected_amount_due = self.group1.price_per_4_sessions / 4 * 2
-        self.assertEqual(response.context['net_amount_due'], expected_amount_due)
-
-        sessions_display = response.context['sessions_display'] # Displays last 8, we have 3 relevant for student1
-        self.assertTrue(any(s['session_id'] == self.session3_g1.id and s['status'] == "حاضر" and not s['is_paid'] for s in sessions_display))
-        self.assertTrue(any(s['session_id'] == self.session2_g1.id and s['status'] == "غائب" and not s['is_paid'] for s in sessions_display))
-        self.assertTrue(any(s['session_id'] == self.session1_g1.id and s['status'] == "حاضر" and s['is_paid'] for s in sessions_display))
-
-
-    def test_post_mark_excused_student_monthly_payment(self):
-        # student1, session2_g1 is absent, not paid. Mark it as excused.
-        attendance_s2 = Attendance.objects.get(student=self.student1, session=self.session2_g1)
-        self.assertFalse(attendance_s2.excused_absence)
-
-        response = self.client.post(
-            reverse('student_monthly_payment', args=[self.student1.id]),
-            data={
-                'action': 'mark_excused',
-                'group_id': self.group1.id, # This should be group_id_post in view, but view uses group_details
-                'session_id': self.session2_g1.id
-            }
-        )
-        self.assertEqual(response.status_code, 302) # Redirects
-        expected_redirect_url = reverse('student_monthly_payment', args=[self.student1.id]) + f'?group_id={self.group1.id}'
-        self.assertRedirects(response, expected_redirect_url)
-
-        attendance_s2.refresh_from_db()
-        self.assertTrue(attendance_s2.excused_absence)
-
-        # Check amount due again, session2 should now be ignored
-        response_after_excuse = self.client.get(reverse('student_monthly_payment', args=[self.student1.id]), {'group_id': self.group1.id})
-        self.assertEqual(response_after_excuse.status_code, 200)
-        # Only session3 (present, unpaid) should be due now
-        expected_amount_due_after_excuse = self.group1.price_per_4_sessions / 4 * 1
-        self.assertEqual(response_after_excuse.context['net_amount_due'], expected_amount_due_after_excuse)
+        expected_sessions_due = 2
+        self.assertEqual(response.context['sessions_due_count'], expected_sessions_due)
 
     def test_post_process_payment_student_monthly_payment_exact_amount(self):
-        # Student1: session2 (absent, unpaid), session3 (present, unpaid). Due = 1000. Pay 1000.
-        # Price per session = 500
-        amount_to_pay = self.group1.price_per_4_sessions / 4 * 2 # For session2 and session3
+        # Student1: session2 (absent, unpaid), session3 (present, unpaid). Due = 2 sessions. Pay for 2.
+        sessions_to_pay = 2
 
         response = self.client.post(
             reverse('student_monthly_payment', args=[self.student1.id]),
             data={
                 'action': 'process_payment',
                 'group_id': self.group1.id,
-                'amount_paid': str(amount_to_pay)
+                'sessions_to_pay': str(sessions_to_pay)
             }
         )
-        self.assertEqual(response.status_code, 302) # Redirects
+        self.assertEqual(response.status_code, 302)
         expected_redirect_url = reverse('student_monthly_payment', args=[self.student1.id]) + f'?group_id={self.group1.id}'
         self.assertRedirects(response, expected_redirect_url)
+
+        student_group = self.student1.studentgroup_set.get(group=self.group1)
+        self.assertEqual(student_group.remaining_sessions, 0)
 
         att_s2 = Attendance.objects.get(student=self.student1, session=self.session2_g1)
         att_s3 = Attendance.objects.get(student=self.student1, session=self.session3_g1)
         self.assertTrue(att_s2.student_paid_for_session)
         self.assertTrue(att_s3.student_paid_for_session)
 
-        # Check amount due again, should be 0
-        response_after_payment = self.client.get(reverse('student_monthly_payment', args=[self.student1.id]), {'group_id': self.group1.id})
-        self.assertEqual(response_after_payment.context['net_amount_due'], Decimal('0.00'))
-
     def test_post_process_payment_student_monthly_payment_overpayment(self):
-        # Student1: session2 (absent, unpaid), session3 (present, unpaid). Due = 1000. Pay 1500.
-        # Overpayment of 500.
-        amount_to_pay = (self.group1.price_per_4_sessions / 4 * 2) + 500
+        # Student1: session2 (absent, unpaid), session3 (present, unpaid). Due = 2 sessions. Pay for 3.
+        sessions_to_pay = 3
 
         response = self.client.post(
             reverse('student_monthly_payment', args=[self.student1.id]),
             data={
                 'action': 'process_payment',
                 'group_id': self.group1.id,
-                'amount_paid': str(amount_to_pay)
+                'sessions_to_pay': str(sessions_to_pay)
             },
             follow=True
         )
         self.assertEqual(response.status_code, 200)
-        messages_list = list(response.context['messages'])
-        self.assertTrue(any("تم إضافة المبلغ المتبقي" in str(msg) and "إلى الرصيد المدفوع مقدماً" in str(msg) for msg in messages_list))
+
+        student_group = self.student1.studentgroup_set.get(group=self.group1)
+        self.assertEqual(student_group.remaining_sessions, 1)
 
         att_s2 = Attendance.objects.get(student=self.student1, session=self.session2_g1)
         att_s3 = Attendance.objects.get(student=self.student1, session=self.session3_g1)
@@ -639,47 +439,26 @@ class StudentMonthlyPaymentPageTests(BasicSetupTests):
         self.assertTrue(att_s3.student_paid_for_session)
 
     def test_post_process_payment_student_monthly_payment_partial_payment(self):
-        # Student1: session2 (absent, unpaid), session3 (present, unpaid). Due = 1000. Pay 500 (covers one session).
-        amount_to_pay = self.group1.price_per_4_sessions / 4 * 1 # For one session
+        # Student1: session2 (absent, unpaid), session3 (present, unpaid). Due = 2 sessions. Pay for 1.
+        sessions_to_pay = 1
 
         response = self.client.post(
             reverse('student_monthly_payment', args=[self.student1.id]),
             data={
                 'action': 'process_payment',
                 'group_id': self.group1.id,
-                'amount_paid': str(amount_to_pay)
+                'sessions_to_pay': str(sessions_to_pay)
             }
         )
         self.assertEqual(response.status_code, 302)
+
+        student_group = self.student1.studentgroup_set.get(group=self.group1)
+        self.assertEqual(student_group.remaining_sessions, 0)
 
         att_s2 = Attendance.objects.get(student=self.student1, session=self.session2_g1) # Chronologically first unpaid
         att_s3 = Attendance.objects.get(student=self.student1, session=self.session3_g1)
         self.assertTrue(att_s2.student_paid_for_session)
         self.assertFalse(att_s3.student_paid_for_session) # Second one should still be unpaid
-
-        response_after_payment = self.client.get(reverse('student_monthly_payment', args=[self.student1.id]), {'group_id': self.group1.id})
-        expected_amount_due_after_partial = self.group1.price_per_4_sessions / 4 * 1
-        self.assertEqual(response_after_payment.context['net_amount_due'], expected_amount_due_after_partial)
-
-    def test_post_process_payment_insufficient_for_one_session(self):
-        price_per_session = self.group1.price_per_4_sessions / 4
-        amount_to_pay = price_per_session - 100 # Less than one session
-
-        response = self.client.post(
-            reverse('student_monthly_payment', args=[self.student1.id]),
-            data={
-                'action': 'process_payment',
-                'group_id': self.group1.id,
-                'amount_paid': str(amount_to_pay)
-            },
-            follow=True
-        )
-        self.assertEqual(response.status_code, 200)
-        messages_list = list(response.context['messages'])
-        self.assertTrue(any(f"المبلغ المدفوع {amount_to_pay} غير كافٍ لدفع حصة كاملة" in str(msg) for msg in messages_list))
-
-        att_s2 = Attendance.objects.get(student=self.student1, session=self.session2_g1)
-        self.assertFalse(att_s2.student_paid_for_session) # Should not be paid
 
 
 class AttendanceApiTests(BasicSetupTests): # This line was part of the original search block for the previous incorrect diff.

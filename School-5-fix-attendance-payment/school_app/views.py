@@ -20,6 +20,10 @@ import logging
 
 # Helper function for logging
 logger = logging.getLogger(__name__)
+
+REGISTRATION_FEE_AMOUNT = Decimal('500.00')
+TEACHER_SESSION_PAY_RATE = Decimal('0.7')
+
 def log_action(action_type, object_name, details=""): # details is now optional
     try:
         ActionLog.objects.create(
@@ -1462,7 +1466,7 @@ def api_record_attendance(request):
             suspension_periods = list(StudentSuspension.objects.filter(student_group=student_group_record))
 
             is_already_paid = attendance.student_paid_for_session
-            has_enough_balance = student.prepaid_balance >= price_per_session
+            has_remaining_sessions = student_group_record.remaining_sessions > 0
             is_after_enrollment = enrollment_date is not None and session.date >= enrollment_date
 
             is_suspended = False
@@ -1475,10 +1479,10 @@ def api_record_attendance(request):
             if is_free_enrollment:
                 payment_status_message = "تسجيل مجاني"
                 sound_signal = 'sound3'
-            elif not is_already_paid and has_enough_balance and is_after_enrollment and not is_suspended:
-                student.prepaid_balance -= price_per_session
+            elif not is_already_paid and has_remaining_sessions and is_after_enrollment and not is_suspended:
+                student_group_record.remaining_sessions -= 1
                 attendance.student_paid_for_session = True
-                student.save(update_fields=['prepaid_balance'])
+                student_group_record.save(update_fields=['remaining_sessions'])
                 payment_status_message = "الحصة مدفوعة بالفعل" # FIX: Unified payment message
                 sound_signal = 'sound1'
             elif is_already_paid:
@@ -1488,8 +1492,8 @@ def api_record_attendance(request):
                 payment_status_message = "لم يتم الخصم (فترة تجميد)"
             elif enrollment_date and session.date < enrollment_date:
                 payment_status_message = "لم يتم الخصم (الحصة قبل تاريخ التسجيل)"
-            elif not has_enough_balance:
-                payment_status_message = f"رصيد غير كافٍ. الرصيد الحالي: {student.prepaid_balance.quantize(Decimal('0.01'))} دج"
+            elif not has_remaining_sessions:
+                payment_status_message = "رصيد غير كافٍ. الحصص المتبقية: 0"
             # Default message remains "الحصة غير مدفوعة" if no other condition is met
 
         elif attendance.student_paid_for_session:
@@ -1868,16 +1872,6 @@ def teacher_payment(request, teacher_id):
         'page_title': page_title
     }
     return render(request, 'school_app/teacher_payment.html', context)
-
-# from django.utils import timezone # For default dates - REMOVED, MOVED TO TOP
-# from decimal import Decimal # Explicit import for Decimal - REMOVED, MOVED TO TOP
-
-# Basic imports required for the new view (some might be duplicates of existing ones but ensures presence)
-from .models import Teacher, Group, Session # Already likely imported, but good to ensure for the new view
-from django.shortcuts import render, get_object_or_404 # Also likely, but ensure
-
-REGISTRATION_FEE_AMOUNT = Decimal('500.00') # Updated registration fee
-TEACHER_SESSION_PAY_RATE = Decimal('0.7') # Placeholder for teacher's share of session fee
 
 def payment_report(request):
     today = timezone.now().date()
@@ -2476,7 +2470,7 @@ def api_record_attendance_by_student(request):
             suspension_periods = list(StudentSuspension.objects.filter(student_group=student_group_record))
 
             is_already_paid = attendance.student_paid_for_session
-            has_enough_balance = student.prepaid_balance >= price_per_session
+            has_remaining_sessions = student_group_record.remaining_sessions > 0
             is_after_enrollment = enrollment_date is not None and target_session.date >= enrollment_date
 
             is_suspended = False
@@ -2489,10 +2483,10 @@ def api_record_attendance_by_student(request):
             if is_free_enrollment:
                 payment_status_message = "تسجيل مجاني"
                 sound_signal = 'sound3'
-            elif not is_already_paid and has_enough_balance and is_after_enrollment and not is_suspended:
-                student.prepaid_balance -= price_per_session
+            elif not is_already_paid and has_remaining_sessions and is_after_enrollment and not is_suspended:
+                student_group_record.remaining_sessions -= 1
                 attendance.student_paid_for_session = True
-                student.save(update_fields=['prepaid_balance'])
+                student_group_record.save(update_fields=['remaining_sessions'])
                 payment_status_message = "الحصة مدفوعة بالفعل" # FIX: Unified payment message
                 sound_signal = 'sound1'
             elif is_already_paid:
@@ -2502,8 +2496,8 @@ def api_record_attendance_by_student(request):
                 payment_status_message = "لم يتم الخصم (فترة تجميد)"
             elif enrollment_date and target_session.date < enrollment_date:
                 payment_status_message = "لم يتم الخصم (الحصة قبل تاريخ التسجيل)"
-            elif not has_enough_balance:
-                payment_status_message = f"رصيد غير كافٍ. الرصيد الحالي: {student.prepaid_balance.quantize(Decimal('0.01'))} دج"
+            elif not has_remaining_sessions:
+                payment_status_message = "رصيد غير كافٍ. الحصص المتبقية: 0"
 
         elif attendance.student_paid_for_session:
              payment_status_message = "الحصة مدفوعة بالفعل"
@@ -2565,448 +2559,174 @@ def student_monthly_payment_view(request, student_id):
 
     group_details = None
     sessions_display = []
-    # amount_due = Decimal('0.00') # Will be net_amount_due
     gross_amount_due = Decimal('0.00')
-    net_amount_due = Decimal('0.00')
     price_per_session = Decimal('0.00')
     attended_but_not_paid_sessions_count = 0
-    prepaid_sessions_count = 0
-    student_prepaid_balance = student.prepaid_balance # Explicitly for context
-
+    remaining_sessions_count = 0
+    sessions_due_count = 0
     page_title = f"الدفع الشهري للطالب: {student.full_name}"
 
     if selected_group_id:
         try:
             selected_group = get_object_or_404(Group, id=selected_group_id, students=student)
             group_details = selected_group
+            student_group = get_object_or_404(StudentGroup, student=student, group=selected_group)
+            remaining_sessions_count = student_group.remaining_sessions
 
             if selected_group.price_per_4_sessions > 0:
                 price_per_session = selected_group.price_per_4_sessions / Decimal('4')
 
-            try:
-                student_group = StudentGroup.objects.get(student=student, group=selected_group)
-                enrollment_date = student_group.enrollment_date
-            except StudentGroup.DoesNotExist:
-                enrollment_date = None
+            enrollment_date = student_group.enrollment_date
+            suspension_periods = list(StudentSuspension.objects.filter(student_group=student_group))
 
-            all_student_sessions_for_group = Session.objects.filter(
+            # Sessions for display (past and current)
+            sessions_for_display = Session.objects.filter(
                 group=selected_group,
                 date__lte=timezone.now().date()
-            ).order_by('-date', '-start_time')
-
+            )
             if enrollment_date:
-                all_student_sessions_for_group = all_student_sessions_for_group.filter(date__gte=enrollment_date)
-            else:
-                # If for some reason enrollment_date is not found, default to a safe value (e.g., filter nothing, or log error)
-                # For now, we proceed, but this indicates a potential data integrity issue if a student is in a group without an enrollment record.
-                pass
+                sessions_for_display = sessions_for_display.filter(date__gte=enrollment_date)
 
-            # The following loop for sessions_display will now use the potentially filtered all_student_sessions_for_group
-
-            # unpaid_sessions_count = 0 # This counter is not used for gross_amount_due, removing from display loop.
-            for session_obj_loop in all_student_sessions_for_group: # Iterate over filtered sessions. Limit for display if too many.
-                 # For display purposes, maybe limit the number of sessions shown or paginate them if the list becomes very long.
-                 # For now, we are showing all "relevant" sessions as per previous logic.
-                # Fetch or create attendance record
-                attendance, created = Attendance.objects.get_or_create(
-                    student=student,
-                    session=session_obj_loop,
+            for session in sessions_for_display.order_by('-date', '-start_time'):
+                attendance, _ = Attendance.objects.get_or_create(
+                    student=student, session=session,
                     defaults={'present': False, 'student_paid_for_session': False, 'excused_absence': False}
                 )
+                sessions_display.append({
+                    'session_id': session.id,
+                    'date': session.date,
+                    'time': session.start_time,
+                    'status': "حاضر" if attendance.present else ("غياب معذور" if attendance.excused_absence else "غائب"),
+                    'paid_status': "مدفوعة" if attendance.student_paid_for_session else "غير مدفوعة",
+                    'is_paid': attendance.student_paid_for_session,
+                    'is_excused': attendance.excused_absence,
+                    'can_be_excused': not attendance.present and not attendance.excused_absence
+                })
 
-                is_relevant = not attendance.student_paid_for_session or \
-                              (not attendance.present and not attendance.excused_absence)
+            # Calculate sessions_due_count
+            if not student_group.is_free:
+                all_sessions_chronological = Session.objects.filter(group=selected_group).order_by('date', 'start_time')
+                if enrollment_date:
+                    all_sessions_chronological = all_sessions_chronological.filter(date__gte=enrollment_date)
 
-                if is_relevant:
-                    status = "لم يحضر"
-                    paid_status = "غير مدفوعة"
-                    is_paid = False
-                    excused = False
-
-                    if attendance.present:
-                        status = "حاضر"
-                    elif attendance.excused_absence:
-                        status = "غياب معذور"
-                        excused = True
-                    else: # Not present and not excused = غائب
-                        status = "غائب"
-
-                    if attendance.student_paid_for_session:
-                        paid_status = "مدفوعة"
-                        is_paid = True
-
-                    can_be_excused = (
-                        not attendance.present and
-                        not attendance.excused_absence and
-                        not attendance.student_paid_for_session and
-                        session_obj_loop.date < timezone.now().date()
+                current_date = timezone.now().date()
+                for session in all_sessions_chronological:
+                    is_suspended = any(
+                        s.start_date <= session.date and (s.end_date is None or session.date <= s.end_date)
+                        for s in suspension_periods
                     )
+                    if is_suspended:
+                        continue
 
-                    sessions_display.append({
-                        'session_id': session_obj_loop.id,
-                        'date': session_obj_loop.date,
-                        'time': session_obj_loop.start_time,
-                        'status': status,
-                        'paid_status': paid_status,
-                        'is_paid': is_paid,
-                        'is_excused': excused,
-                        'can_be_excused': can_be_excused
-                    })
+                    att = Attendance.objects.filter(student=student, session=session).first()
+                    if session.date <= current_date:
+                        if not att or (not att.student_paid_for_session and not att.excused_absence):
+                            sessions_due_count += 1
 
-            # Calculate amount due based on unpaid, non-excused sessions
-            # This is a simplified calculation. True accounting might be more complex.
-            # For now, count unpaid sessions that are not excused absences.
+            gross_amount_due = sessions_due_count * price_per_session
 
-            # Recalculate unpaid_sessions_count for amount_due accurately
-            # This should count sessions that require payment.
-            billable_unpaid_count = 0
-
-            # <<< FIX: If the enrollment is marked as free, no amount is due >>>
-            if student_group.is_free:
-                gross_amount_due = Decimal('0.00')
-                attended_but_not_paid_sessions_count = 0 # Reset this as well
-            else:
-                # Also calculate attended_but_not_paid_sessions_count in the same loop
-
-                # <<< FIX: Fetch suspension periods to exclude them from calculations >>>
-                suspension_periods = list(StudentSuspension.objects.filter(student_group=student_group))
-
-            # Base query for chronological sessions
-            all_sessions_for_group_chronological = Session.objects.filter(
-                group=selected_group
-            ).order_by('date', 'start_time')
-
-            if enrollment_date:
-                all_sessions_for_group_chronological = all_sessions_for_group_chronological.filter(date__gte=enrollment_date)
-
-            current_date = timezone.now().date()
-
-            for session_obj in all_sessions_for_group_chronological:
-                # <<< FIX: Check if session is within a suspension period >>>
-                is_suspended = False
-                for suspension in suspension_periods:
-                    is_open_suspension = suspension.end_date is None
-                    if suspension.start_date <= session_obj.date and (is_open_suspension or session_obj.date <= suspension.end_date):
-                        is_suspended = True
-                        break
-
-                if is_suspended:
-                    continue # Skip this session entirely from calculations
-
-                att = Attendance.objects.filter(student=student, session=session_obj).first()
-                is_past_or_current_session = session_obj.date <= current_date
-
-                if att:
-                    if not att.student_paid_for_session and not att.excused_absence:
-                        if is_past_or_current_session: # Only count past/current sessions as billable
-                            billable_unpaid_count += 1
-                        # For attended_but_not_paid, session date doesn't strictly matter as long as attendance exists
-                        if att.present:
-                             attended_but_not_paid_sessions_count += 1
-                else: # No attendance record
-                    if is_past_or_current_session: # Billable if past/current and no record
-                         billable_unpaid_count +=1
-                         # Not attended if no record, so doesn't contribute to attended_but_not_paid_sessions_count
-
-            gross_amount_due = billable_unpaid_count * price_per_session
-            net_amount_due = gross_amount_due - student_prepaid_balance # Use the explicit variable
-            if net_amount_due < Decimal('0.00'):
-                net_amount_due = Decimal('0.00')
-
-            # Calculate prepaid_sessions_count
-            if price_per_session > Decimal('0.00') and student_prepaid_balance > Decimal('0.00'):
-                import math # Ensure math is imported
-                prepaid_sessions_count = math.floor(student_prepaid_balance / price_per_session)
-            else:
-                prepaid_sessions_count = 0
-
-        except Group.DoesNotExist:
+        except (Group.DoesNotExist, StudentGroup.DoesNotExist):
             messages.error(request, "الفوج المحدد غير صحيح أو الطالب غير مسجل فيه.")
-            group_details = None # Ensure it's reset
+            group_details = None
 
     if request.method == 'POST':
         action = request.POST.get('action')
-        group_id_post = request.POST.get('group_id') # This is from a hidden input in the form
+        group_id_post = request.POST.get('group_id')
 
-        # Initialize group_details and price_per_session for POST context
-        current_group_details_post = None
-        current_price_per_session_post = Decimal('0.00')
-
-        if group_id_post:
-            try:
-                current_group_details_post = get_object_or_404(Group, id=group_id_post, students=student)
-                if current_group_details_post.price_per_4_sessions > 0:
-                    current_price_per_session_post = current_group_details_post.price_per_4_sessions / Decimal('4')
-            except Group.DoesNotExist:
-                messages.error(request, "الفوج المحدد في الطلب غير صالح أو الطالب ليس مسجلاً فيه.")
-                return redirect(reverse('student_monthly_payment', args=[student_id]))
-
-        if not current_group_details_post:
-            messages.error(request, "لم يتم تحديد فوج صالح للعملية المطلوبة.")
+        try:
+            current_group_details_post = get_object_or_404(Group, id=group_id_post, students=student)
+            student_group_for_payment = get_object_or_404(StudentGroup, student=student, group=current_group_details_post)
+        except (Group.DoesNotExist, StudentGroup.DoesNotExist):
+            messages.error(request, "الفوج المحدد في الطلب غير صالح.")
             return redirect(reverse('student_monthly_payment', args=[student_id]))
 
-        # Now use current_group_details_post and current_price_per_session_post for POST actions
+        if action == 'process_payment':
+            try:
+                sessions_to_pay_str = request.POST.get('sessions_to_pay', '0')
+                number_of_sessions_to_pay = int(sessions_to_pay_str)
 
-        if action == 'mark_excused':
+                if number_of_sessions_to_pay > 0:
+                    with transaction.atomic():
+                        student_group_for_payment.remaining_sessions += number_of_sessions_to_pay
+                        student_group_for_payment.save()
+
+                        log_action(
+                            'group_session_payment_processed',
+                            f"الطالب: {student.full_name}",
+                            f"دفع الطالب '{student.full_name}' لـ {number_of_sessions_to_pay} حصص في فوج '{current_group_details_post.name}'."
+                        )
+                        messages.success(request, f"تمت إضافة {number_of_sessions_to_pay} حصص إلى رصيد الطالب بنجاح.")
+
+                        # Automatically pay for past unpaid sessions
+                        unpaid_sessions = Attendance.objects.filter(
+                            student=student,
+                            session__group=current_group_details_post,
+                            student_paid_for_session=False,
+                            excused_absence=False,
+                            session__date__lte=timezone.now().date()
+                        ).order_by('session__date', 'session__start_time')
+
+                        sessions_marked_paid_count = 0
+                        for attendance in unpaid_sessions:
+                            if student_group_for_payment.remaining_sessions > 0:
+                                attendance.student_paid_for_session = True
+                                attendance.save()
+                                student_group_for_payment.remaining_sessions -= 1
+                                sessions_marked_paid_count += 1
+                            else:
+                                break
+
+                        student_group_for_payment.save()
+                        if sessions_marked_paid_count > 0:
+                            messages.info(request, f"تم تطبيق الدفع على {sessions_marked_paid_count} حصص سابقة غير مدفوعة.")
+                else:
+                    messages.error(request, "عدد الحصص المدفوعة يجب أن يكون رقماً موجباً.")
+            except (ValueError, TypeError):
+                messages.error(request, "الرجاء إدخال عدد صحيح من الحصص.")
+            return redirect(reverse('student_monthly_payment', args=[student_id]) + f'?group_id={group_id_post}')
+
+        elif action == 'mark_excused':
             session_id_to_excuse = request.POST.get('session_id')
             if session_id_to_excuse:
                 try:
-                    attendance_to_excuse = Attendance.objects.select_related('session__group').get(session_id=session_id_to_excuse, student=student)
-
-                    # Ensure the session belongs to the group being viewed to calculate price correctly
-                    if attendance_to_excuse.session.group.id != current_group_details_post.id:
-                        messages.error(request, "خطأ: الحصة لا تنتمي إلى الفوج المحدد.")
-                        return redirect(reverse('student_monthly_payment', args=[student_id]) + f'?group_id={group_id_post}')
-
+                    attendance_to_excuse = Attendance.objects.get(session_id=session_id_to_excuse, student=student)
                     if not attendance_to_excuse.present:
-                        # Start a database transaction to ensure all or nothing is saved.
                         with transaction.atomic():
                             was_paid = attendance_to_excuse.student_paid_for_session
-
-                            # Always mark as excused
                             attendance_to_excuse.excused_absence = True
-
-                            # If it was paid, refund the student and mark as unpaid
                             if was_paid:
-                                if current_price_per_session_post > Decimal('0'):
-                                    student.prepaid_balance += current_price_per_session_post
-                                    student.save()
-
-                                    attendance_to_excuse.student_paid_for_session = False
-
-                                    messages.success(request, f"تم تسجيل غياب حصة {attendance_to_excuse.session.date.strftime('%Y-%m-%d')} كغياب معذور، وتمت إعادة مبلغ الحصة إلى رصيد الطالب.")
-                                else:
-                                    # This case handles if the session price is zero, still mark as excused
-                                    messages.info(request, f"تم تسجيل غياب حصة {attendance_to_excuse.session.date.strftime('%Y-%m-%d')} كغياب معذور (لم يتم استرداد أي مبلغ لأن سعر الحصة هو صفر).")
+                                student_group_for_payment.remaining_sessions += 1
+                                student_group_for_payment.save()
+                                attendance_to_excuse.student_paid_for_session = False
+                                messages.success(request, f"تم تسجيل غياب حصة {attendance_to_excuse.session.date.strftime('%Y-%m-%d')} كغياب معذور، وتمت إعادة حصة إلى رصيد الطالب.")
                             else:
-                                # If it wasn't paid, just mark it as excused
                                 messages.success(request, f"تم تسجيل غياب حصة {attendance_to_excuse.session.date.strftime('%Y-%m-%d')} كغياب معذور.")
-
                             attendance_to_excuse.save()
-
                     else:
                         messages.warning(request, "لا يمكن تسجيل غياب معذور لحصة كان الطالب فيها حاضراً.")
                 except Attendance.DoesNotExist:
                     messages.error(request, "سجل الحضور المحدد غير موجود.")
             return redirect(reverse('student_monthly_payment', args=[student_id]) + f'?group_id={group_id_post}')
 
-        elif action == 'process_payment':
-            amount_paid_str = request.POST.get('amount_paid')
+        elif action == 'adjust_balance':
             try:
-                amount_paid_from_form = Decimal(amount_paid_str) # Renamed to avoid conflict
+                sessions_to_adjust_str = request.POST.get('sessions_to_adjust', '0')
+                sessions_to_adjust = int(sessions_to_adjust_str)
 
-                # <<< FIX: Check if enrollment is free before processing payment >>>
-                student_group_for_payment_check = current_group_details_post.studentgroup_set.get(student=student)
-                if student_group_for_payment_check.is_free:
-                    if amount_paid_from_form > Decimal('0.00'):
-                        student.prepaid_balance += amount_paid_from_form
-                        student.save()
-                        messages.success(request, f"الطالب يدرس مجاناً في هذا الفوج. تم إضافة المبلغ المدفوع ({amount_paid_from_form} دج) إلى رصيده العام.")
-                    else:
-                        messages.info(request, "لا يمكن معالجة دفعة بقيمة صفر.")
-                    return redirect(reverse('student_monthly_payment', args=[student_id]) + f'?group_id={group_id_post}')
+                with transaction.atomic():
+                    student_group_for_payment.remaining_sessions += sessions_to_adjust
+                    student_group_for_payment.save()
 
-                amount_paid = amount_paid_from_form # Effective amount to be used for payment processing
-
-                prepaid_used_this_transaction = Decimal('0.00')
-                if student.prepaid_balance > Decimal('0.00'):
-                    if student.prepaid_balance >= amount_paid_from_form : # Prepaid covers all or more than the form amount
-                        # This interpretation is tricky. If form amount is what they INTEND to pay now,
-                        # and prepaid is enough, then form amount is covered by prepaid.
-                        # OR if amount_paid_from_form is the TOTAL they want to settle, including using prepaid.
-                        # Assuming amount_paid_from_form is the cash/card payment being made NOW.
-                        # The prepaid will be added to this.
-                        messages.info(request, f"تم استخدام رصيد مدفوع مقدماً بقيمة: {student.prepaid_balance} دج.")
-                        amount_paid += student.prepaid_balance
-                        prepaid_used_this_transaction = student.prepaid_balance
-                        student.prepaid_balance = Decimal('0.00')
-                        # student.save() # Save student after prepaid is fully used or partially used.
-                    else: # Prepaid covers some part of what might be due, or just adds to the payment
-                        messages.info(request, f"تم استخدام رصيد مدفوع مقدماً بقيمة: {student.prepaid_balance} دج.")
-                        amount_paid += student.prepaid_balance
-                        prepaid_used_this_transaction = student.prepaid_balance
-                        student.prepaid_balance = Decimal('0.00')
-                        # student.save()
-
-                if amount_paid <= 0: # Check effective amount_paid
-                    messages.error(request, "المبلغ المدفوع (بعد إضافة الرصيد المسبق إن وجد) يجب أن يكون أكبر من صفر.")
-                else:
-                    # Logic for processing payment
-                    # 1. Identify billable (unpaid, non-excused) sessions chronologically
-                    sessions_to_pay_for = []
-                    # Use the correctly fetched group details for POST
-                    all_sessions_chronological = Session.objects.filter(group=current_group_details_post).order_by('date', 'start_time')
-
-                    # <<< FIX: Apply enrollment_date filter and get suspension periods during payment processing >>>
-                    try:
-                        student_group_for_payment = StudentGroup.objects.get(student=student, group=current_group_details_post)
-                        enrollment_date_for_payment = student_group_for_payment.enrollment_date
-                        if enrollment_date_for_payment:
-                            all_sessions_chronological = all_sessions_chronological.filter(date__gte=enrollment_date_for_payment)
-
-                        suspension_periods_for_payment = list(StudentSuspension.objects.filter(student_group=student_group_for_payment))
-
-                    except StudentGroup.DoesNotExist:
-                        # This case should ideally not be reached if validation is correct, but as a safeguard:
-                        messages.error(request, "لم يتم العثور على تاريخ تسجيل الطالب في الفوج. لا يمكن متابعة الدفع.")
-                        return redirect(reverse('student_monthly_payment', args=[student_id]) + f'?group_id={group_id_post}')
-
-
-                    current_balance = amount_paid # Amount available to pay off sessions (includes prepaid if used)
-                    sessions_paid_in_this_transaction_count = 0
-                    list_of_session_ids_just_paid = [] # Initialize list to store IDs of paid sessions
-                    successfully_paid_session_dates = [] # For consolidated messaging
-
-                    for session_obj in all_sessions_chronological:
-                        if current_balance <= Decimal('0'): # Stop if no balance left
-                            break
-
-                        # Ensure price_per_session (current_price_per_session_post) is valid before proceeding
-                        if current_price_per_session_post <= Decimal('0'):
-                            messages.error(request, "سعر الحصة المحدد للفوج غير صالح. لا يمكن معالجة الدفع.")
-                            current_balance = Decimal('-1') # Mark balance as invalid to stop further processing
-                            break
-
-                        # <<< FIX: Check if session is within a suspension period before paying >>>
-                        is_suspended = False
-                        for suspension in suspension_periods_for_payment:
-                            is_open_suspension = suspension.end_date is None
-                            if suspension.start_date <= session_obj.date and (is_open_suspension or session_obj.date <= suspension.end_date):
-                                is_suspended = True
-                                break
-
-                        if is_suspended:
-                            continue # Do not pay for this session
-
-                        attendance, created = Attendance.objects.get_or_create(
-                            student=student,
-                            session=session_obj,
-                            defaults={'present': False, 'student_paid_for_session': False, 'excused_absence': False}
-                        )
-
-                        if not attendance.student_paid_for_session and not attendance.excused_absence:
-                            if current_balance >= current_price_per_session_post:
-                                attendance.student_paid_for_session = True
-                                attendance.save()
-                                current_balance -= current_price_per_session_post
-                                sessions_paid_in_this_transaction_count += 1
-                                list_of_session_ids_just_paid.append(str(session_obj.id)) # Add ID to list
-                                successfully_paid_session_dates.append(session_obj.date.strftime('%Y-%m-%d'))
-                                # messages.success(request, f"تم دفع حصة {session_obj.date.strftime('%Y-%m-%d')} بنجاح.") # Removed for consolidation
-                            else:
-                                # Not enough balance to cover this session fully
-                                if sessions_paid_in_this_transaction_count == 0 and not successfully_paid_session_dates: # If no session was paid at all with the amount
-                                     messages.info(request, f"المبلغ المدفوع {amount_paid_from_form} غير كافٍ لدفع حصة كاملة بسعر {current_price_per_session_post}.") # Use amount_paid_from_form for clarity
-                                break # Stop processing further sessions if balance can't cover the current one
-
-                    # Overpayment logic - this loop structure might be redundant if the first loop already processes all available balance.
-                    # However, if the first loop breaks due to not enough for *one* session, but there's still *some* balance,
-                    # this second loop ensures that balance is handled (e.g. added to prepaid).
-                    # The original logic for `additional_sessions_paid_with_overpayment` implies it was intended to pay more sessions.
-                    # For now, let's refine the message part and assume the loop logic for paying is okay.
-                    # The `list_of_session_ids_just_paid` already collects all paid sessions from both loops.
-
-                    # Consolidate messages for successfully paid sessions
-                    if successfully_paid_session_dates:
-                        messages.success(request, f"تم دفع {len(successfully_paid_session_dates)} حصص بنجاح للتواريخ: {', '.join(sorted(list(set(successfully_paid_session_dates))))}.")
-
-                    # Handle remaining balance and other info messages
-                    # The `additional_sessions_paid_with_overpayment` was based on a second loop.
-                    # Given `list_of_session_ids_just_paid` now includes all, we can compare its length to `sessions_paid_in_this_transaction_count`
-                    # This part needs careful review to ensure messages align with the unified collection of paid sessions.
-
-                    # Let's simplify: if current_balance remains after attempting all payments.
-                    if current_balance > Decimal('0.00') and current_price_per_session_post > Decimal('0.00'):
-                        # This means there's leftover money.
-                        # If some sessions were paid initially, this is true overpayment.
-                        # If NO sessions were paid initially (e.g., all were already paid, or amount was too small for any single session),
-                        # then the entire `amount_paid` (adjusted by prepaid) might become `current_balance`.
-
-                        student.prepaid_balance += current_balance
-                        messages.success(request, f"تم إضافة المبلغ المتبقي {current_balance.quantize(Decimal('0.01'))} دج إلى الرصيد المدفوع مقدماً للطالب.")
-
-                    elif sessions_paid_in_this_transaction_count == 0 and not successfully_paid_session_dates and amount_paid > Decimal('0.00') and current_price_per_session_post > Decimal('0.00'):
-                        # This case: amount_paid (cash + initial prepaid) was positive, but no sessions were paid (e.g., all already paid or amount too small for any).
-                        # The remaining current_balance (which is amount_paid here) should go to prepaid.
-                        # This condition might be partly covered by the one above if current_balance is the full amount_paid.
-                        # To avoid double-adding to prepaid or conflicting messages, this needs to be clean.
-                        # If `successfully_paid_session_dates` is empty, and `amount_paid` (cash+initial_prepaid) was > 0
-                        if not student.prepaid_balance == (amount_paid - prepaid_used_this_transaction + current_balance): # Avoid double message if already handled by above
-                             student.prepaid_balance += current_balance # This is the original amount_paid if nothing was spent
-                             messages.info(request, f"لا توجد حصص لدفعها أو المبلغ غير كافٍ. تم إضافة {current_balance.quantize(Decimal('0.01'))} دج بالكامل إلى الرصيد المدفوع مقدماً.")
-
-                    # Save student if prepaid_balance was potentially changed
-                    # This includes: initial use of prepaid, or adding remaining balance to prepaid.
-                    if prepaid_used_this_transaction > Decimal('0.00') or (current_balance > Decimal('0.00') and current_price_per_session_post > Decimal('0.00')) :
-                        student.save()
-
-                    # Log the payment action
-                    if sessions_paid_in_this_transaction_count > 0:
-                        log_action(
-                            'group_session_payment_processed',
-                            f"الطالب: {student.full_name}",
-                            f"دفع الطالب '{student.full_name}' مبلغ {amount_paid_from_form.quantize(Decimal('0.01'))} دج (استخدم رصيد مسبق: {prepaid_used_this_transaction.quantize(Decimal('0.01'))} دج) لـ {sessions_paid_in_this_transaction_count} حصص في فوج '{current_group_details_post.name}'."
-                        )
-
-                    # Always try to generate a receipt URL if a payment was attempted
-                    if amount_paid_from_form > Decimal('0.00') or prepaid_used_this_transaction > Decimal('0.00'):
-                        paid_session_ids_str = ",".join(list_of_session_ids_just_paid)
-                        receipt_url = reverse('print_student_payment_receipt', args=[student_id, current_group_details_post.id]) + f"?amount_paid={amount_paid_from_form}&session_ids={paid_session_ids_str}&prepaid_used={prepaid_used_this_transaction}"
-                        request.session['last_payment_receipt_url'] = receipt_url
-                    # The condition for amount_paid <= 0 (effective) is handled by the error message earlier.
-
-            except ValueError: # Catches Decimal conversion error for amount_paid_str
-                messages.error(request, "المبلغ المدفوع المدخل غير صالح.")
-
-            # Preserve the group_id in the redirect URL
-            redirect_url = reverse('student_monthly_payment', args=[student_id])
-            if group_id_post:
-                redirect_url += f'?group_id={group_id_post}'
-            return redirect(redirect_url)
-
-        elif action == 'reduce_prepaid_balance':
-            sessions_to_reduce_count_str = request.POST.get('sessions_to_reduce_count')
-            group_id_for_reduction_price = request.POST.get('group_id') # This is selected_group.id from the form
-
-            try:
-                sessions_to_reduce_count = int(sessions_to_reduce_count_str)
-                if sessions_to_reduce_count <= 0:
-                    messages.error(request, "عدد الحصص للتخفيض يجب أن يكون رقماً موجباً.")
-                    raise ValueError("Invalid session count")
-
-                group_for_price_info = get_object_or_404(Group, id=group_id_for_reduction_price)
-
-                price_per_session_for_reduction = Decimal('0.00')
-                if group_for_price_info.price_per_4_sessions and group_for_price_info.price_per_4_sessions > Decimal('0'):
-                    price_per_session_for_reduction = group_for_price_info.price_per_4_sessions / Decimal('4')
-
-                if price_per_session_for_reduction <= Decimal('0.00'):
-                    messages.error(request, "سعر الفوج المحدد غير صالح لحساب التخفيض (السعر صفر أو سالب).")
-                    raise ValueError("Invalid group price for reduction")
-
-                amount_to_deduct = sessions_to_reduce_count * price_per_session_for_reduction
-                old_balance = student.prepaid_balance
-
-                if student.prepaid_balance >= amount_to_deduct:
-                    student.prepaid_balance -= amount_to_deduct
-                    student.save()
                     log_action(
-                        'prepaid_balance_reduced',
-                        f"Student {student.id} - {student.full_name}",
-                        f"Reduced by {amount_to_deduct} DZD ({sessions_to_reduce_count} sessions from group {group_for_price_info.name}). Old balance: {old_balance}, New balance: {student.prepaid_balance}"
+                        'manual_balance_adjustment',
+                        f"الطالب: {student.full_name}",
+                        f"تم تعديل رصيد الطالب '{student.full_name}' في فوج '{current_group_details_post.name}' بـ {sessions_to_adjust} حصص."
                     )
-                    messages.success(request, f"تم تخفيض الرصيد المسبق بنجاح بمقدار {amount_to_deduct} دج.")
-                else:
-                    messages.error(request, f"لا يمكن تخفيض الرصيد. الرصيد الحالي ({student.prepaid_balance} دج) أقل من المبلغ المراد خصمه ({amount_to_deduct} دج).")
+                    messages.success(request, f"تم تعديل رصيد الحصص بـ {sessions_to_adjust} حصة/حصص بنجاح.")
 
-            except (ValueError, TypeError): # Catches int conversion error and raised ValueErrors
-                if not messages.get_messages(request): # Add a generic error if none was added yet
-                    messages.error(request, "الرجاء إدخال عدد حصص صحيح للتخفيض.")
-            except Group.DoesNotExist:
-                 messages.error(request, "الفوج المحدد لحساب سعر التخفيض غير موجود.")
-
-            return redirect(reverse('student_monthly_payment', args=[student_id]) + f'?group_id={group_id_for_reduction_price}')
-
+            except (ValueError, TypeError):
+                messages.error(request, "الرجاء إدخال عدد صحيح للتعديل.")
+            return redirect(reverse('student_monthly_payment', args=[student_id]) + f'?group_id={group_id_post}')
 
     receipt_url_from_session = request.session.pop('last_payment_receipt_url', None)
     context = {
@@ -3015,11 +2735,10 @@ def student_monthly_payment_view(request, student_id):
         'selected_group': group_details,
         'sessions_display': sessions_display,
         'gross_amount_due': gross_amount_due,
-        'net_amount_due': net_amount_due,
         'price_per_session': price_per_session,
-        'student_prepaid_balance': student_prepaid_balance,
         'attended_but_not_paid_sessions_count': attended_but_not_paid_sessions_count,
-        'prepaid_sessions_count': prepaid_sessions_count,
+        'remaining_sessions_count': remaining_sessions_count,
+        'sessions_due_count': sessions_due_count,
         'page_title': page_title,
         'receipt_url': receipt_url_from_session,
     }
