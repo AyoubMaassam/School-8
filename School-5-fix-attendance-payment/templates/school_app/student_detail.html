@@ -28,7 +28,6 @@
             <p><strong>تاريخ الميلاد:</strong> {{ student.birth_day }}/{{ student.birth_month }}/{{ student.birth_year }}</p>
             <p><strong>المستوى الدراسي:</strong> {{ student.academic_level.get_category_display }} - {{ student.academic_level.name }}</p>
             <p><strong>رقم البطاقة:</strong> {{ student.card_number }}</p>
-            <p><strong>الرصيد المدفوع مقدماً العام:</strong> <span class="badge badge-success">{{ student.prepaid_balance|floatformat:2 }} دج</span></p>
             <p><strong>رسوم التسجيل مدفوعة:</strong> {% if student.registration_fee_paid %}<span class="badge badge-success">نعم</span>{% else %}<span class="badge badge-danger">لا</span>{% endif %}</p>
         </div>
         <div class="card-footer">
@@ -71,8 +70,8 @@
                                 <span class="badge badge-danger badge-pill">{{ group_stat.unpaid_non_excused_sessions_count }}</span>
                             </li>
                              <li class="list-group-item d-flex justify-content-between align-items-center">
-                                الحصص المدفوعة المسبقة المتبقية (للاستخدام المستقبلي في هذا الفوج):
-                                <span class="badge badge-primary badge-pill">{{ group_stat.remaining_future_paid_sessions_for_group }}</span>
+                                الحصص المتبقية:
+                                <span class="badge badge-primary badge-pill">{{ group_stat.remaining_sessions }}</span>
                             </li>
                             <li class="list-group-item d-flex justify-content-between align-items-center">
                                 الغيابات المعذورة:

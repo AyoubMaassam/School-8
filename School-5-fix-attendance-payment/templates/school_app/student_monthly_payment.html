@@ -66,11 +66,8 @@
                 <p><strong>سعر الـ 4 حصص:</strong> {{ selected_group.price_per_4_sessions|floatformat:2 }} دج (يعني {{ price_per_session|floatformat:2 }} دج للحصة الواحدة)</p>
 
                 <div class="my-3 p-3 bg-light border rounded">
-                    <h5>الرصيد المسبق للطالب:</h5>
-                    <p><strong>الرصيد الحالي (دج):</strong> <span class="badge badge-info" style="font-size: 1rem;">{{ student_prepaid_balance|floatformat:2 }} دج</span></p>
-                    {% if price_per_session > 0 %}
-                    <p><strong>يعادل تقريباً (حصص مسبقة الدفع):</strong> <span class="badge badge-primary" style="font-size: 1rem;">{{ prepaid_sessions_count }}</span> حصص لهذا الفوج</p>
-                    {% endif %}
+                    <h5>رصيد الحصص المتبقية:</h5>
+                    <p><strong>الحصص المتبقية:</strong> <span class="badge badge-primary" style="font-size: 1rem;">{{ remaining_sessions }}</span> حصص</p>
                 </div>
 
                 <h5 class="mt-4">حصص الطالب المعنية بالدفع أو التبرير (الأقدم أولاً إذا كانت القائمة طويلة):</h5>
@@ -123,17 +120,12 @@
                     <p class="text-muted">لا توجد حصص بحاجة للدفع أو التبرير لهذا الفوج حالياً بناءً على تاريخ التحاق الطالب.</p>
                 {% endif %}
 
-                <h5 class="mt-3">إجمالي المبلغ المطلوب (قبل خصم الرصيد المسبق): <span class="text-secondary font-weight-bold">{{ gross_amount_due|floatformat:2 }} دج</span></h5>
-                {% if student_prepaid_balance > 0 and gross_amount_due > 0 %}
-                    <p class="text-info">سيتم استخدام رصيدك المدفوع مقدماً ({{ student_prepaid_balance|floatformat:2 }} دج) لتغطية جزء من هذا المبلغ.</p>
-                {% endif %}
-                <h5 class="mt-1">المبلغ الصافي المستحق حالياً للدفع: <span class="text-danger font-weight-bold">{{ net_amount_due|floatformat:2 }} دج</span></h5>
-
-                <p class="text-muted small">(المبلغ المطلوب يحسب بناءً على جميع الحصص الغير مدفوعة والتي لم يتم تسجيلها كغياب معذور للطالب في هذا الفوج منذ تاريخ التحاقه الفعلي، مع مراعاة الرصيد المدفوع مقدماً.)</p>
+                <h5 class="mt-3">قيمة الحصص الغير مدفوعة: <span class="text-danger font-weight-bold">{{ gross_amount_due|floatformat:2 }} دج</span></h5>
+                <p class="text-muted small">(المبلغ المطلوب يحسب بناءً على جميع الحصص الغير مدفوعة والتي لم يتم تسجيلها كغياب معذور للطالب في هذا الفوج منذ تاريخ التحاقه الفعلي.)</p>
 
                 <div class="card mt-4">
                     <div class="card-header bg-success text-white">
-                        <h5 class="mb-0">تسديد الدفعات</h5>
+                        <h5 class="mb-0">إضافة رصيد الحصص</h5>
                     </div>
                     <div class="card-body">
                         <form method="POST" action="{% url 'student_monthly_payment' student.id %}" class="mt-2">
@@ -141,38 +133,12 @@
                             <input type="hidden" name="action" value="process_payment">
                             <input type="hidden" name="group_id" value="{{ selected_group.id }}">
                             <div class="form-group">
-                                <label for="amount_paid">المبلغ المدفوع نقداً/بالبطاقة الآن:</label>
-                                <input type="number" name="amount_paid" id="amount_paid" class="form-control" step="0.01" min="0" placeholder="أدخل المبلغ المدفوع (إن وجد)" {% if net_amount_due == 0 %}value="0"{% endif %} required>
-                                {% if net_amount_due == 0 and student.prepaid_balance >= gross_amount_due and gross_amount_due > 0 %}
-                                    <small class="form-text text-success">الرصيد المدفوع مقدماً يغطي كامل المبلغ المطلوب لهذه المجموعة. يمكنك ترك المبلغ المدفوع 0 إذا كنت لا ترغب في إضافة المزيد إلى الرصيد المسبق.</small>
-                                {% elif net_amount_due == 0 and gross_amount_due == 0 %}
-                                    <small class="form-text text-info">لا توجد مبالغ مستحقة حالياً لهذا الفوج.</small>
-                                {% endif %}
+                                <label for="sessions_to_add">عدد الحصص المراد إضافتها:</label>
+                                <input type="number" name="sessions_to_add" id="sessions_to_add" class="form-control" min="1" placeholder="أدخل عدد الحصص" required>
+                                <small class="form-text text-muted">سيتم إضافة هذا العدد إلى رصيد الحصص المتبقية للطالب في هذا الفوج.</small>
                             </div>
                             <button type="submit" class="btn btn-success">
-                                <i class="fas fa-dollar-sign"></i> دفع وتحديث الرصيد
-                            </button>
-                        </form>
-                    </div>
-                </div>
-
-                <div class="card mt-4">
-                    <div class="card-header bg-warning">
-                        <h5 class="mb-0">تخفيض الرصيد المسبق يدوياً</h5>
-                    </div>
-                    <div class="card-body">
-                        <p class="small text-muted">استخدم هذا الخيار إذا أردت خصم عدد معين من الحصص من الرصيد المسبق للطالب لهذا الفوج (مثلاً، إذا تم الاتفاق على استخدام الرصيد المسبق لحصص لم تسجل إلكترونياً).</p>
-                        <form method="POST" action="{% url 'student_monthly_payment' student.id %}">
-                            {% csrf_token %}
-                            <input type="hidden" name="action" value="reduce_prepaid_balance">
-                            <input type="hidden" name="group_id" value="{{ selected_group.id }}">
-                            <div class="form-group">
-                                <label for="sessions_to_reduce_count">عدد الحصص لتخفيضها من الرصيد المسبق:</label>
-                                <input type="number" name="sessions_to_reduce_count" id="sessions_to_reduce_count" class="form-control" min="1" required>
-                            </div>
-                             <p class="small">سيتم خصم مبلغ يعادل قيمة هذه الحصص من الرصيد المسبق للطالب لهذا الفوج.</p>
-                            <button type="submit" class="btn btn-warning">
-                                <i class="fas fa-minus-circle"></i> تخفيض الرصيد
+                                <i class="fas fa-plus-circle"></i> إضافة الحصص
                             </button>
                         </form>
                     </div>

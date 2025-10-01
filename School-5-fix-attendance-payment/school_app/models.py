@@ -37,7 +37,6 @@ class Student(models.Model):
     academic_level = models.ForeignKey(AcademicLevel, on_delete=models.PROTECT, verbose_name="المستوى الدراسي")
     registration_fee_paid = models.BooleanField(default=False, verbose_name="رسوم التسجيل مدفوعة")
     card_number = models.CharField(max_length=20, unique=True, blank=True, null=True, verbose_name="رقم البطاقة")
-    prepaid_balance = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), verbose_name="رصيد مدفوع مقدماً")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="تاريخ الإنشاء")
     
     def __str__(self):
@@ -96,6 +95,7 @@ class StudentGroup(models.Model):
     enrollment_date = models.DateField(auto_now_add=True, verbose_name="تاريخ التسجيل في الفوج")
     is_active = models.BooleanField(default=True, verbose_name="الحالة (نشط)")
     is_free = models.BooleanField(default=False, verbose_name="تسجيل مجاني")
+    remaining_sessions = models.IntegerField(default=0, verbose_name="عدد الحصص المتبقية")
 
     class Meta:
         unique_together = ('student', 'group')
@@ -146,19 +146,14 @@ class Session(models.Model):
 
     def delete(self, *args, **kwargs):
         with transaction.atomic():
-            # Check if the group and price are valid before proceeding
-            if self.group and self.group.price_per_4_sessions and self.group.price_per_4_sessions > 0:
-                price_per_session = self.group.price_per_4_sessions / Decimal('4.0')
-
-                # Find all paid attendance records for this session
-                paid_attendances = self.attendance_set.filter(student_paid_for_session=True)
-
-                for attendance in paid_attendances:
-                    student = attendance.student
-                    student.prepaid_balance += price_per_session
-                    student.save(update_fields=['prepaid_balance'])
-
-            # After handling refunds, proceed with the actual deletion
+            paid_attendances = self.attendance_set.filter(student_paid_for_session=True)
+            for attendance in paid_attendances:
+                try:
+                    student_group = StudentGroup.objects.get(student=attendance.student, group=self.group)
+                    student_group.remaining_sessions += 1
+                    student_group.save()
+                except StudentGroup.DoesNotExist:
+                    pass
             super(Session, self).delete(*args, **kwargs)
 
 class Attendance(models.Model):
