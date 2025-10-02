@@ -13,12 +13,25 @@
 <div class="card">
   <div class="card-body">
     <form method="get" action="{% url 'group_list' %}" class="mb-3">
-      <div class="input-group">
-        <input type="text" name="q" class="form-control" placeholder="ابحث باسم الفوج, المادة, أو المدرس..." value="{{ search_query|default:'' }}">
-        <div class="input-group-append">
-          <button class="btn btn-outline-secondary" type="submit">
-            <i class="fas fa-search"></i> بحث
+      <div class="form-row align-items-center">
+        <div class="col-md-5 mb-2">
+          <input type="text" name="q" class="form-control" placeholder="ابحث باسم الفوج, المادة, أو المدرس..." value="{{ search_query|default:'' }}">
+        </div>
+        <div class="col-md-5 mb-2">
+          <select name="academic_level" class="form-control">
+            <option value="">-- فلترة حسب المستوى الدراسي --</option>
+            {% for level in all_academic_levels %}
+              <option value="{{ level.id }}" {% if selected_academic_level_id == level.id %}selected{% endif %}>
+                {{ level.get_category_display }} - {{ level.name }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-2 mb-2">
+          <button class="btn btn-primary btn-block" type="submit">
+            <i class="fas fa-filter"></i> تطبيق
           </button>
+          <a href="{% url 'group_list' %}" class="btn btn-secondary btn-block mt-1">إلغاء</a>
         </div>
       </div>
     </form>

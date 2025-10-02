@@ -824,21 +824,29 @@ def add_teacher(request):
 # Group views
 def group_list(request):
     query = request.GET.get('q', '').strip()
+    academic_level_id = request.GET.get('academic_level', '').strip()
+
     groups_qs = Group.objects.select_related('subject', 'teacher').prefetch_related('students', 'academic_levels')
 
     if query:
         groups_qs = groups_qs.filter(
             Q(name__icontains=query) |
             Q(subject__name__icontains=query) |
-            Q(teacher__full_name__icontains=query) |
-            Q(academic_levels__name__icontains=query)
+            Q(teacher__full_name__icontains=query)
         ).distinct()
+
+    if academic_level_id:
+        groups_qs = groups_qs.filter(academic_levels__id=academic_level_id)
+
+    all_academic_levels = AcademicLevel.objects.all().order_by('category', 'name')
 
     groups = groups_qs.order_by('name')
     context = {
         'groups': groups,
         'page_title': 'قائمة الأفواج',
-        'search_query': query
+        'search_query': query,
+        'all_academic_levels': all_academic_levels,
+        'selected_academic_level_id': int(academic_level_id) if academic_level_id.isdigit() else None,
     }
     return render(request, 'school_app/group_list.html', context)
 
