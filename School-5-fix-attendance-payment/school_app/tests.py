@@ -4,7 +4,7 @@ from django.utils import timezone
 from decimal import Decimal
 import json
 
-from .models import Student, Teacher, AcademicLevel, Subject, Group, Session, Attendance, ActionLog
+from .models import Student, Teacher, AcademicLevel, Subject, Group, Session, Attendance, ActionLog, StudentGroup
 from . import views # To access constants like REGISTRATION_FEE_AMOUNT
 
 # A_REGISTRATION_FEE_AMOUNT = Decimal('500.00') # Defined in views
@@ -60,24 +60,34 @@ class BasicSetupTests(TestCase):
             session_day=0, session_start_time="14:00:00", session_duration=Decimal('1.5')
         )
         self.group1.academic_levels.add(self.level_high1)
-        self.group1.students.add(self.student1)
+        # self.group1.students.add(self.student1) # Replaced with manual StudentGroup creation
+        StudentGroup.objects.create(
+            student=self.student1,
+            group=self.group1,
+            enrollment_date=timezone.now().date() - timezone.timedelta(days=30) # Fixed past date
+        )
 
-        # Sessions for Group1
+        # Sessions for Group1 (with fixed dates within the current month to stabilize tests)
+        today = timezone.now().date()
+        # Ensure tests don't fail at the end of the month by setting a safe day
+        day_to_set = min(today.day, 28)
+        safe_date = today.replace(day=day_to_set)
+
         self.session1_g1 = Session.objects.create(
-            group=self.group1, date=timezone.now().date() - timezone.timedelta(days=14),
+            group=self.group1, date=safe_date.replace(day=1),
             start_time="14:00:00", duration=Decimal('1.5'), teacher_attended=True
         )
         self.session2_g1 = Session.objects.create(
-            group=self.group1, date=timezone.now().date() - timezone.timedelta(days=7),
+            group=self.group1, date=safe_date.replace(day=8),
             start_time="14:00:00", duration=Decimal('1.5'), teacher_attended=True
         )
-        self.session3_g1 = Session.objects.create( # Current week's session
-            group=self.group1, date=timezone.now().date(),
+        self.session3_g1 = Session.objects.create(
+            group=self.group1, date=safe_date.replace(day=15),
             start_time="14:00:00", duration=Decimal('1.5'), teacher_attended=True
         )
-        self.session4_g1 = Session.objects.create( # Future session
-            group=self.group1, date=timezone.now().date() + timezone.timedelta(days=7),
-            start_time="14:00:00", duration=Decimal('1.5') # Teacher attendance not yet set
+        self.session4_g1 = Session.objects.create(
+            group=self.group1, date=safe_date.replace(day=22),
+            start_time="14:00:00", duration=Decimal('1.5')
         )
 
         # Attendance records for student1 in group1
@@ -234,7 +244,6 @@ class AttendanceApiTests(BasicSetupTests):
 
 class SessionDeletionTests(BasicSetupTests):
     def test_session_deletion_refunds_paid_students(self):
-        # Create a new student with a zero prepaid balance
         student3 = Student.objects.create(
             full_name="Refund Test Student",
             phone_number="0777123125",
@@ -242,10 +251,10 @@ class SessionDeletionTests(BasicSetupTests):
             birth_day=1,
             birth_month=1,
             birth_year=2005,
-            academic_level=self.level_high1,
-            prepaid_balance=Decimal('0.00')
+            academic_level=self.level_high1
         )
         self.group1.students.add(student3)
+        student_group = StudentGroup.objects.get(student=student3, group=self.group1)
 
         # Create a new session for the group
         session_to_delete = Session.objects.create(
@@ -263,18 +272,18 @@ class SessionDeletionTests(BasicSetupTests):
             student_paid_for_session=True
         )
 
-        # Ensure the student's balance is 0 before deletion
-        self.assertEqual(student3.prepaid_balance, Decimal('0.00'))
+        # Ensure the student's group balance is 0 before deletion
+        self.assertEqual(student_group.balance, Decimal('0.00'))
 
         # Delete the session
         session_to_delete.delete()
 
-        # Refresh the student object from the database
-        student3.refresh_from_db()
+        # Refresh the student_group object from the database
+        student_group.refresh_from_db()
 
-        # Check if the student's prepaid balance has been refunded
+        # Check if the student's group balance has been refunded
         price_per_session = self.group1.price_per_4_sessions / Decimal('4.0')
-        self.assertEqual(student3.prepaid_balance, price_per_session)
+        self.assertEqual(student_group.balance, price_per_session)
 
 
 class TeacherMonthlyPaymentPageTests(BasicSetupTests):
@@ -405,8 +414,7 @@ class TeacherMonthlyPaymentPageTests(BasicSetupTests):
             'sessions_to_pay_ids': [],
         }
         response = self.client.post(reverse('teacher_monthly_payment', args=[self.teacher1.id]), data=payload)
-        self.assertEqual(response.status_code, 302)
-        response = self.client.get(response.url)
+        self.assertEqual(response.status_code, 200) # Should render the page with an error
         messages_list = list(response.context['messages'])
         self.assertTrue(any("الرجاء اختيار حصة واحدة على الأقل للحساب" in str(msg) for msg in messages_list))
 
@@ -432,6 +440,7 @@ class PaymentReportPageTests(BasicSetupTests):
 
         # Teacher1 compensation for session1_g1
         self.session1_g1.teacher_compensated = True
+        self.session1_g1.teacher_payment_amount = (self.group1.price_per_4_sessions / 4) * views.TEACHER_SESSION_PAY_RATE
         self.session1_g1.save()
 
 
@@ -482,13 +491,17 @@ class PaymentReportPageTests(BasicSetupTests):
         new_student = Student.objects.create(
             full_name="Filt Student", phone_number="0123", guardian_phone="0124",
             birth_day=1,birth_month=1,birth_year=2000, academic_level=self.level_high1,
-            registration_fee_paid=True, created_at=timezone.now() # Within range
+            registration_fee_paid=True
         )
+        # Manually update created_at to a time within the filter range to bypass auto_now_add
+        Student.objects.filter(pk=new_student.pk).update(created_at=filter_start_date + timezone.timedelta(days=1))
 
         new_session = Session.objects.create(
             group=self.group1, date=filter_start_date + timezone.timedelta(days=1), # Within range
             start_time="10:00", duration=1.5, teacher_attended=True, teacher_compensated=True
         )
+        new_session.teacher_payment_amount = (new_session.group.price_per_4_sessions / 4) * views.TEACHER_SESSION_PAY_RATE
+        new_session.save()
         Attendance.objects.create(student=new_student, session=new_session, present=True, student_paid_for_session=True)
 
         response = self.client.get(
@@ -631,7 +644,7 @@ class StudentMonthlyPaymentPageTests(BasicSetupTests):
         )
         self.assertEqual(response.status_code, 200)
         messages_list = list(response.context['messages'])
-        self.assertTrue(any("تم إضافة المبلغ المتبقي" in str(msg) and "إلى الرصيد المدفوع مقدماً" in str(msg) for msg in messages_list))
+        self.assertTrue(any("تم إضافة المبلغ المتبقي" in str(msg) and "إلى رصيد الطالب في الفوج" in str(msg) for msg in messages_list))
 
         att_s2 = Attendance.objects.get(student=self.student1, session=self.session2_g1)
         att_s3 = Attendance.objects.get(student=self.student1, session=self.session3_g1)

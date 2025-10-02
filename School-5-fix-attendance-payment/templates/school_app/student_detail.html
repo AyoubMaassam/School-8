@@ -28,7 +28,6 @@
             <p><strong>تاريخ الميلاد:</strong> {{ student.birth_day }}/{{ student.birth_month }}/{{ student.birth_year }}</p>
             <p><strong>المستوى الدراسي:</strong> {{ student.academic_level.get_category_display }} - {{ student.academic_level.name }}</p>
             <p><strong>رقم البطاقة:</strong> {{ student.card_number }}</p>
-            <p><strong>الرصيد المدفوع مقدماً العام:</strong> <span class="badge badge-success">{{ student.prepaid_balance|floatformat:2 }} دج</span></p>
             <p><strong>رسوم التسجيل مدفوعة:</strong> {% if student.registration_fee_paid %}<span class="badge badge-success">نعم</span>{% else %}<span class="badge badge-danger">لا</span>{% endif %}</p>
         </div>
         <div class="card-footer">
@@ -81,6 +80,10 @@
                             <li class="list-group-item d-flex justify-content-between align-items-center">
                                 المبلغ المستحق لهذا الفوج:
                                 <span class="badge badge-danger badge-pill">{{ group_stat.amount_due_for_group|floatformat:2 }} دج</span>
+                            </li>
+                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                الرصيد المدفوع مقدماً في هذا الفوج:
+                                <span class="badge badge-success badge-pill">{{ group_stat.group_balance|floatformat:2 }} دج</span>
                             </li>
                             <li class="list-group-item d-flex justify-content-between align-items-center">
                                 حالة الدفع:

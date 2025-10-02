@@ -37,7 +37,6 @@ class Student(models.Model):
     academic_level = models.ForeignKey(AcademicLevel, on_delete=models.PROTECT, verbose_name="المستوى الدراسي")
     registration_fee_paid = models.BooleanField(default=False, verbose_name="رسوم التسجيل مدفوعة")
     card_number = models.CharField(max_length=20, unique=True, blank=True, null=True, verbose_name="رقم البطاقة")
-    prepaid_balance = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), verbose_name="رصيد مدفوع مقدماً")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="تاريخ الإنشاء")
     
     def __str__(self):
@@ -96,6 +95,7 @@ class StudentGroup(models.Model):
     enrollment_date = models.DateField(auto_now_add=True, verbose_name="تاريخ التسجيل في الفوج")
     is_active = models.BooleanField(default=True, verbose_name="الحالة (نشط)")
     is_free = models.BooleanField(default=False, verbose_name="تسجيل مجاني")
+    balance = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), verbose_name="الرصيد")
 
     class Meta:
         unique_together = ('student', 'group')
@@ -154,9 +154,13 @@ class Session(models.Model):
                 paid_attendances = self.attendance_set.filter(student_paid_for_session=True)
 
                 for attendance in paid_attendances:
-                    student = attendance.student
-                    student.prepaid_balance += price_per_session
-                    student.save(update_fields=['prepaid_balance'])
+                    try:
+                        student_group = StudentGroup.objects.get(student=attendance.student, group=self.group)
+                        student_group.balance += price_per_session
+                        student_group.save(update_fields=['balance'])
+                    except StudentGroup.DoesNotExist:
+                        # This case is unlikely for a paid session but handled for safety
+                        pass
 
             # After handling refunds, proceed with the actual deletion
             super(Session, self).delete(*args, **kwargs)
