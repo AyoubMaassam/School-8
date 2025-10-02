@@ -28,7 +28,6 @@
             <p><strong>تاريخ الميلاد:</strong> {{ student.birth_day }}/{{ student.birth_month }}/{{ student.birth_year }}</p>
             <p><strong>المستوى الدراسي:</strong> {{ student.academic_level.get_category_display }} - {{ student.academic_level.name }}</p>
             <p><strong>رقم البطاقة:</strong> {{ student.card_number }}</p>
-            <p><strong>الرصيد المدفوع مقدماً العام:</strong> <span class="badge badge-success">{{ student.prepaid_balance|floatformat:2 }} دج</span></p>
             <p><strong>رسوم التسجيل مدفوعة:</strong> {% if student.registration_fee_paid %}<span class="badge badge-success">نعم</span>{% else %}<span class="badge badge-danger">لا</span>{% endif %}</p>
         </div>
         <div class="card-footer">
@@ -57,6 +56,10 @@
                             <li class="list-group-item d-flex justify-content-between align-items-center">
                                 سعر الـ 4 حصص:
                                 <span class="badge badge-secondary badge-pill">{{ group_stat.price_per_4_sessions|floatformat:2 }} دج</span>
+                            </li>
+                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                رصيد الطالب في الفوج:
+                                <span class="badge badge-success badge-pill">{{ group_stat.balance|floatformat:2 }} دج</span>
                             </li>
                             <li class="list-group-item d-flex justify-content-between align-items-center">
                                 إجمالي الحصص (حتى اليوم):
